@@ -1032,9 +1032,26 @@
   const fmtI = n => Math.round(n).toLocaleString();
   const save = () => {
     localStorage.setItem(KEY, JSON.stringify(entries));
+    setSyncState('syncing');
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(pushToCloud, 600);
+    saveTimer = setTimeout(pushToCloud, 250);
   };
+
+  // Flush any pending write before the page unloads (handles the
+  // "log entry then immediately reload" case)
+  window.addEventListener('beforeunload', () => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      try {
+        fetch(BIN_URL, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-Master-Key': BIN_KEY },
+          body: JSON.stringify({ entries }),
+          keepalive: true
+        });
+      } catch (e) {}
+    }
+  });
 
   function render() {
     const t = { Junior: 0, Senior: 0, Other: 0, g: 0 };
