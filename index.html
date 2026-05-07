@@ -61,7 +61,24 @@
     align-items: center;
     gap: 24px;
   }
-  .header-spacer { justify-self: end; }
+  .header-spacer { justify-self: end; display: flex; align-items: center; gap: 10px; }
+  .sync-status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--muted, #6b7280);
+    padding: 4px 8px; border-radius: 999px; background: var(--line-2, #f3f4f6);
+  }
+  .sync-status .sync-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #9ca3af;
+    box-shadow: 0 0 0 0 rgba(0,0,0,0);
+  }
+  .sync-status[data-state="synced"] .sync-dot { background: #10b981; }
+  .sync-status[data-state="syncing"] .sync-dot,
+  .sync-status[data-state="loading"] .sync-dot {
+    background: #f59e0b; animation: syncPulse 1s ease-in-out infinite;
+  }
+  .sync-status[data-state="offline"] .sync-dot { background: #ef4444; }
+  @keyframes syncPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .brand { display: flex; align-items: center; gap: 10px; }
   .brand-mark {
     width: 32px; height: 32px;
@@ -653,7 +670,12 @@
       <a href="#guide" data-view="guide">What to bring</a>
       <a href="#order" data-view="order">Order</a>
     </nav>
-    <div class="header-spacer"></div>
+    <div class="header-spacer">
+      <div class="sync-status" id="syncStatus" data-state="loading" title="School-wide sync status">
+        <span class="sync-dot"></span>
+        <span class="sync-label">Loading…</span>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -948,14 +970,71 @@
 
 <script>
   const KEY = 'polymer.entries.v1';
+  const BIN_ID = '69fc6c8e250b1311c3179ead';
+  const BIN_KEY = '$2a$10$4XbIUhZvNdZihKxoCnpeQeqJR9hQLruDZ2C29wBzczBj8jz6BwfYu';
+  const BIN_URL = 'https://api.jsonbin.io/v3/b/' + BIN_ID;
   let entries = [];
   try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch(e) { entries = []; }
+
+  const setSyncState = (state) => {
+    const el = document.getElementById('syncStatus');
+    if (!el) return;
+    el.dataset.state = state;
+    const labels = { synced: 'Synced', syncing: 'Syncing…', offline: 'Offline', loading: 'Loading…' };
+    const lbl = el.querySelector('.sync-label');
+    if (lbl) lbl.textContent = labels[state] || state;
+  };
+
+  let saveTimer = null, savePending = false, saveInFlight = false;
+  async function pushToCloud() {
+    if (saveInFlight) { savePending = true; return; }
+    saveInFlight = true;
+    setSyncState('syncing');
+    try {
+      const res = await fetch(BIN_URL, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Master-Key': BIN_KEY,
+          'X-Bin-Versioning': 'true'
+        },
+        body: JSON.stringify({ entries })
+      });
+      if (!res.ok) throw new Error('save failed');
+      setSyncState('synced');
+    } catch(e) {
+      setSyncState('offline');
+    } finally {
+      saveInFlight = false;
+      if (savePending) { savePending = false; pushToCloud(); }
+    }
+  }
+
+  async function pullFromCloud() {
+    setSyncState('loading');
+    try {
+      const res = await fetch(BIN_URL + '/latest', { headers: { 'X-Master-Key': BIN_KEY } });
+      if (!res.ok) throw new Error('load failed');
+      const json = await res.json();
+      const cloud = (json && json.record && Array.isArray(json.record.entries)) ? json.record.entries : [];
+      entries = cloud;
+      localStorage.setItem(KEY, JSON.stringify(entries));
+      setSyncState('synced');
+      render();
+    } catch(e) {
+      setSyncState('offline');
+    }
+  }
 
   const $ = s => document.querySelector(s);
   const $$ = s => document.querySelectorAll(s);
   const fmt = (n, d=2) => Number(n).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
   const fmtI = n => Math.round(n).toLocaleString();
-  const save = () => localStorage.setItem(KEY, JSON.stringify(entries));
+  const save = () => {
+    localStorage.setItem(KEY, JSON.stringify(entries));
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(pushToCloud, 600);
+  };
 
   function render() {
     const t = { Junior: 0, Senior: 0, Other: 0, g: 0 };
@@ -1112,6 +1191,9 @@
   });
 
   render();
+  pullFromCloud();
+  window.addEventListener('focus', pullFromCloud);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pullFromCloud(); });
 </script>
 
 </body>
