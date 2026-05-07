@@ -1011,12 +1011,25 @@
   }
 
   async function pullFromCloud() {
+    // Don't overwrite if we have unsaved local changes — they'd lose data
+    if (saveTimer || saveInFlight || savePending) return;
     setSyncState('loading');
     try {
       const res = await fetch(BIN_URL + '/latest', { headers: { 'X-Master-Key': BIN_KEY } });
       if (!res.ok) throw new Error('load failed');
       const json = await res.json();
       const cloud = (json && json.record && Array.isArray(json.record.entries)) ? json.record.entries : [];
+      // Check again AFTER fetch — user may have added an entry during the round-trip
+      if (saveTimer || saveInFlight || savePending) {
+        setSyncState('syncing');
+        return;
+      }
+      // If local has data and cloud is empty, push local up instead of clobbering it
+      if (cloud.length === 0 && entries.length > 0) {
+        setSyncState('syncing');
+        pushToCloud();
+        return;
+      }
       entries = cloud;
       localStorage.setItem(KEY, JSON.stringify(entries));
       setSyncState('synced');
